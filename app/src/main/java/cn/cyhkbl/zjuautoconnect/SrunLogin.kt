@@ -4,6 +4,7 @@ import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
+import okhttp3.Proxy as OkHttpProxy
 import okhttp3.Request
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
@@ -51,8 +52,7 @@ object SrunLogin {
         val ssl = SSLContext.getInstance("TLS").apply { init(null, trustAll, SecureRandom()) }
 
         return OkHttpClient.Builder()
-            .proxy(okhttp3.Proxy.NO_PROXY)  // 强制无代理
-            .proxySelector { listOf() }       // 兜底:代理选择器也返回空
+            .proxy(OkHttpProxy.NO_PROXY)  // 强制无代理
             .sslSocketFactory(ssl.socketFactory, trustAll[0] as X509TrustManager)
             .hostnameVerifier { _, _ -> true }
             .connectTimeout(5, TimeUnit.SECONDS)

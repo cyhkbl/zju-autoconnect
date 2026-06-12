@@ -28,6 +28,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * 前台服务:监听 WiFi 状态,连上 ZJUWLAN 后自动登录
@@ -73,9 +74,9 @@ class NetworkMonitorService : Service() {
     // 全局状态(供 UI 读取)
     object State {
         val isRunning = AtomicBoolean(false)
-        val lastSsid = AtomicReferenceExt<String?>(null)
-        val lastLoginAt = AtomicReferenceExt<Long?>(null)
-        val lastLoginResult = AtomicReferenceExt<SrunLogin.Result?>(null)
+        val lastSsid = AtomicReference<String?>(null)
+        val lastLoginAt = AtomicReference<Long?>(null)
+        val lastLoginResult = AtomicReference<SrunLogin.Result?>(null)
         val totalAttempts = AtomicInteger(0)
         val successfulLogins = AtomicInteger(0)
     }
@@ -293,9 +294,3 @@ class NetworkMonitorService : Service() {
     }
 }
 
-// 简易 atomic reference(避免引入 AtomicReference 类名冲突)
-private class AtomicReferenceExt<T>(initial: T?) {
-    private val ref = java.util.concurrent.atomic.AtomicReference<T?>(initial)
-    fun get(): T? = ref.get()
-    fun set(value: T?) = ref.set(value)
-}
