@@ -84,20 +84,20 @@ object SrunCrypto {
 
         while (q > 0) {
             d = (d + c) and 0xFFFFFFFF.toInt()
-            val e = d shr 2 and 3
+            val e = d ushr 2 and 3
             var p = 0
             while (p < n) {
                 val y = pwd[p + 1]
-                var m = (z shr 5) xor (y shl 2)
-                m = m + (((y shr 3) xor (z shl 4)) xor (d xor y))
+                var m = (z ushr 5) xor (y shl 2)
+                m = m + (((y ushr 3) xor (z shl 4)) xor (d xor y))
                 m = m + ((pwdkArr[(p and 3) xor e] xor z))
                 pwd[p] = (pwd[p] + m) and 0xFFFFFFFF.toInt()
                 z = pwd[p]
                 p++
             }
             val y0 = pwd[0]
-            var m0 = (z shr 5) xor (y0 shl 2)
-            m0 = m0 + (((y0 shr 3) xor (z shl 4)) xor (d xor y0))
+            var m0 = (z ushr 5) xor (y0 shl 2)
+            m0 = m0 + (((y0 ushr 3) xor (z shl 4)) xor (d xor y0))
             m0 = m0 + ((pwdkArr[(n and 3) xor e] xor z))
             pwd[n] = (pwd[n] + m0) and 0xFFFFFFFF.toInt()
             z = pwd[n]
