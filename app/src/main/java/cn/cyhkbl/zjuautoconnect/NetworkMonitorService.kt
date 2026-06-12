@@ -79,6 +79,8 @@ class NetworkMonitorService : Service() {
         val lastLoginResult = AtomicReference<SrunLogin.Result?>(null)
         val totalAttempts = AtomicInteger(0)
         val successfulLogins = AtomicInteger(0)
+        // 最近日志快照(供 Activity 读取)
+        val logSnapshot = AtomicReference<List<String>>(emptyList())
     }
 
     // 日志环形缓冲(最近 50 条)
@@ -92,15 +94,24 @@ class NetworkMonitorService : Service() {
     private val isLoginInFlight = AtomicBoolean(false)
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
+            // onAvailable 触发时 SSID 经常还没就绪(尤其 Android 12+),
+            // 立即尝试一次,失败就等 onCapabilitiesChanged
             val caps = connectivityManager.getNetworkCapabilities(network)
             if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true) {
-                onWifiConnected()
+                handleWifiCapabilities(network, caps)
+            }
+        }
+
+        override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                handleWifiCapabilities(network, caps)
             }
         }
 
         override fun onLost(network: Network) {
             log("WiFi 断开")
             State.lastSsid.set(null)
+            State.lastLoginResult.set(null)
             updateStatusNotification()
         }
     }
@@ -116,9 +127,26 @@ class NetworkMonitorService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIFICATION_ID, buildStatusNotification("监听中…", "等待连接 ZJUWLAN"))
         registerNetworkCallback()
-        // 启动时立刻检查一次当前 WiFi(可能服务启动前已经连上了)
-        serviceScope.launch { checkCurrentWifiAndLogin() }
+        // 启动时立即查一次当前 WiFi(可能服务启动前已经连上 ZJUWLAN)
+        serviceScope.launch { checkCurrentWifiOnce() }
         return START_STICKY
+    }
+
+    /**
+     * 服务启动时主动检查:用当前 active network + caps 查一次
+     * (callback 可能要等 WiFi 重连才触发)
+     */
+    private suspend fun checkCurrentWifiOnce() {
+        val active = connectivityManager.activeNetwork ?: run {
+            log("当前无活动网络,等待 WiFi 回调")
+            return
+        }
+        val caps = connectivityManager.getNetworkCapabilities(active) ?: return
+        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+            handleWifiCapabilities(active, caps)
+        } else {
+            log("当前非 WiFi,等待 WiFi 回调")
+        }
     }
 
     private fun registerNetworkCallback() {
@@ -132,37 +160,46 @@ class NetworkMonitorService : Service() {
         }
     }
 
-    private fun onWifiConnected() {
-        serviceScope.launch {
-            checkCurrentWifiAndLogin()
-        }
-    }
-
     /**
-     * 检查当前连接的 WiFi,如果在目标 SSID 列表中则触发登录
+     * WiFi capabilities 就绪时的处理:
+     * 1. 尝试读取 SSID
+     * 2. SSID 匹配目标 → 触发登录
+     * 3. SSID 读不到 → 明确打日志(用户能看出是权限问题)
      */
-    private suspend fun checkCurrentWifiAndLogin() {
-        val ssid = readCurrentSsid() ?: return
-        State.lastSsid.set(ssid)
-        log("已连接: $ssid")
-        updateStatusNotification()
-        if (ssid !in TARGET_SSIDS) {
-            log("非目标 SSID,跳过登录")
+    private fun handleWifiCapabilities(network: Network, caps: NetworkCapabilities) {
+        val ssid = readSsidFromCaps(caps)
+        if (ssid == null) {
+            val reason = when {
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
+                    "Android 12+ 读取 SSID 需要位置权限(设置→应用→ZJU 校园网→位置)"
+                else -> "transportInfo 为空"
+            }
+            log("⚠️ WiFi 已连接但 SSID 不可见: $reason")
+            State.lastSsid.set(null)
+            updateStatusNotification()
             return
         }
-        attemptLogin()
+        // 同一 SSID 多次触发不重复登录
+        if (ssid == State.lastSsid.get()) {
+            return
+        }
+        State.lastSsid.set(ssid)
+        log("📶 已连接 WiFi: $ssid")
+        updateStatusNotification()
+        if (ssid in TARGET_SSIDS) {
+            log("✅ 匹配目标 → 触发登录")
+            serviceScope.launch { attemptLogin() }
+        } else {
+            log("⏭ 非目标 SSID (目标: $TARGET_SSIDS),跳过登录")
+        }
     }
 
     /**
-     * 读取当前 WiFi 的 SSID(兼容不同 Android 版本)
-     *  - 优先 NetworkCapabilities(API 29+ 更准)
-     *  - 兜底用 WifiManager.getConnectionInfo(API <26 唯一方式)
+     * 从 NetworkCapabilities 读 SSID(API 31+ 唯一可靠方式)
+     * API < 31 走 wifiManager.connectionInfo 兜底
      */
-    private fun readCurrentSsid(): String? {
+    private fun readSsidFromCaps(caps: NetworkCapabilities): String? {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            // API 31+: 走 NetworkCallback 里拿到的 caps
-            val active = connectivityManager.activeNetwork ?: return null
-            val caps = connectivityManager.getNetworkCapabilities(active) ?: return null
             val transportInfo = caps.transportInfo as? WifiInfo
             val raw = transportInfo?.ssid ?: return null
             return sanitizeSsid(raw)
@@ -226,6 +263,8 @@ class NetworkMonitorService : Service() {
         synchronized(logLock) {
             logBuffer.addLast(line)
             while (logBuffer.size > maxLogLines) logBuffer.removeFirst()
+            // 同步给 State,UI 可以读取
+            State.logSnapshot.set(logBuffer.toList())
         }
     }
 
@@ -265,18 +304,20 @@ class NetworkMonitorService : Service() {
     }
 
     private fun updateStatusNotification() {
-        val lastResult = State.lastLoginResult.get()
-        val title = when (lastResult) {
-            is SrunLogin.Result.Success -> "✅ 已连网"
-            is SrunLogin.Result.AlreadyOnline -> "✅ 已在网"
-            is SrunLogin.Result.Failed -> "❌ 上次登录失败"
-            is SrunLogin.Result.NoNetwork -> "⚠️ 无网络"
-            null -> "监听中…"
-        }
+        val lastResult = NetworkMonitorService.State.lastLoginResult.get()
         val ssid = State.lastSsid.get()
+        val title = when {
+            lastResult is SrunLogin.Result.Success -> "✅ 已登录"
+            lastResult is SrunLogin.Result.AlreadyOnline -> "✅ 已在网"
+            lastResult is SrunLogin.Result.Failed -> "❌ 上次登录失败"
+            lastResult is SrunLogin.Result.NoNetwork -> "⚠️ 无网络"
+            ssid != null && ssid in TARGET_SSIDS -> "📶 ZJUWLAN 已连接,登录中…"
+            ssid != null -> "📶 已连: $ssid (非目标网络)"
+            else -> "👀 监听中…"
+        }
         val content = buildString {
-            if (ssid != null) append("SSID: $ssid  ·  ")
             append("成功 ${State.successfulLogins.get()}/${State.totalAttempts.get()}")
+            if (ssid != null) append("  ·  $ssid")
         }
         val nm = getSystemService(NotificationManager::class.java)
         nm.notify(NOTIFICATION_ID, buildStatusNotification(title, content))

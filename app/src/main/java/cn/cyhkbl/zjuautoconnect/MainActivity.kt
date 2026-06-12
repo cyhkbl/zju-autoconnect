@@ -184,10 +184,23 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    private val refreshHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val refreshRunnable = object : Runnable {
+        override fun run() {
+            refreshStatus()
+            refreshLogs()
+            refreshHandler.postDelayed(this, 1000)  // 每秒刷一次
+        }
+    }
+
     override fun onResume() {
         super.onResume()
-        refreshStatus()
-        refreshLogs()
+        refreshHandler.post(refreshRunnable)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        refreshHandler.removeCallbacks(refreshRunnable)
     }
 
     private fun refreshStatus() {
@@ -229,9 +242,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshLogs() {
-        // 服务在本进程里跑时,可以直接读;不在时读不到就显示空
-        logAdapter.submit(emptyList())  // 服务日志是环形 buffer,UI 这里只展示本地事件
-        // 简化:仅显示状态,日志由 logcat 记录。如需看日志,可用 adb logcat | grep NetMonService
+        // 从 State 读服务的日志快照(服务跟 Activity 同进程)
+        logAdapter.submit(NetworkMonitorService.State.logSnapshot.get())
     }
 
     /**
