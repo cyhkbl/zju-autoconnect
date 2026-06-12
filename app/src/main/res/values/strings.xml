@@ -12,7 +12,7 @@
     <string name="btn_stop_service">停止服务</string>
     <string name="btn_manual_login">手动登录</string>
     <string name="btn_clear_logs">清空</string>
-    <string name="hint_username">例如 3250102535</string>
+    <string name="hint_username">例如 3200000000</string>
     <string name="hint_password">校园网密码</string>
     <string name="status_idle">未启动</string>
     <string name="status_monitoring">监听中</string>

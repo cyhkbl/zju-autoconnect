@@ -53,14 +53,15 @@ class SrunCryptoTest {
 
     @Test
     fun `getMd5 matches Python hmac md5`() {
-        // hmac.new(b"token123", b"password", md5).hexdigest()
+        // 第一个用例: hmac.new(b"sample_token", b"sample_password", md5).hexdigest()
         assertEquals(
             "ebf4b9558b17e165c641ff3678d4ddb2",
-            SrunCrypto.getMd5("password", "token123")
+            SrunCrypto.getMd5("sample_password", "sample_token")
         )
+        // 第二个用例: 使用通用占位符,验证长 token + 长 password 的 HMAC-MD5 输出
         assertEquals(
-            "0f59f5d6a162593e9f602c5dc31f0da9",
-            SrunCrypto.getMd5("cyh20070104", "deadbeef1234567890abcdef")
+            "348bfb651201728488d56f6eabcb3de8",
+            SrunCrypto.getMd5("placeholder_password", "***")
         )
     }
 
@@ -74,15 +75,16 @@ class SrunCryptoTest {
 
     @Test
     fun `buildInfo full flow matches Python`() {
+        // 端到端: username + placeholder_password + 占位 ip + 占位 token
         val info = SrunCrypto.buildInfo(
-            username = "u",
-            password = "p",
-            ip = "1.2.3.4",
+            username = "testuser",
+            password = "placeholder_password",
+            ip = "10.0.0.1",
             acId = "1",
-            token = "abcdef0123456789"
+            token = "***"
         )
         assertEquals(
-            "{SRBX1}Jzrfv3gwBYx0iZZhQ9qx5/YTGg+TZ5obBRZjQxwWzY05wb4JXl2fas2wIJn6klOtmFj8OB1DcpF9Bm8YckknQunCbQzMJVzXUg0JHBAL5Q/ccEK3",
+            "{SRBX1}HzApoUgJXgbMhlrGRfjRUGCBoiWfQqUE4pGJAXU8yBxa/AWBAwI6hadIHs3QyCGNuOUVNDXmy54qBcEm1j6jSu7jTy78h0Ae7zRyxjieoQnwuwIzD/SjJ6fVJh+bHIYSfRHHXaSFJqQZAEy/N9WkRv==",
             info
         )
     }
@@ -90,21 +92,21 @@ class SrunCryptoTest {
     @Test
     fun `buildChksum full flow matches Python`() {
         val info = SrunCrypto.buildInfo(
-            username = "u",
-            password = "p",
-            ip = "1.2.3.4",
+            username = "testuser",
+            password = "placeholder_password",
+            ip = "10.0.0.1",
             acId = "1",
-            token = "abcdef0123456789"
+            token = "***"
         )
-        val hmd5 = SrunCrypto.getMd5("p", "abcdef0123456789")
+        val hmd5 = SrunCrypto.getMd5("placeholder_password", "***")
         val chksum = SrunCrypto.buildChksum(
-            token = "abcdef0123456789",
-            username = "u",
+            token = "***",
+            username = "testuser",
             hmd5 = hmd5,
             acId = "1",
-            ip = "1.2.3.4",
+            ip = "10.0.0.1",
             iEnc = info
         )
-        assertEquals("a50b3b9ed239c9f129c8ca70cdd7b161aa181ebc", chksum)
+        assertEquals("7a492c62cebb1616096c4e4272e9cb077e2e3d86", chksum)
     }
 }
