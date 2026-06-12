@@ -62,12 +62,32 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: ZJU-AutoConnect-debug
+          path: dist
+
+      - name: Rename to readable filename
+        run: |
+          mv dist/app-debug.apk "dist/ZJU-AutoConnect-${GITHUB_REF_NAME}-debug.apk"
+          ls -la dist/
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          files: app-debug.apk
+          files: dist/ZJU-AutoConnect-${GITHUB_REF_NAME}-debug.apk
           draft: false
           generate_release_notes: true
+          fail_on_unmatched_files: true
+          body: |
+            ## ZJU 校园网自动连接 (Android)
+
+            **直接下载下方的 `*.apk` 文件传到手机安装即可。**
+
+            - 🪪 首次启动填学号 + 校园网密码,本地加密保存 (EncryptedSharedPreferences)
+            - 🔔 必须授予通知权限,前台服务才能运行
+            - 📍 Android 13+ 还需要位置权限(读取 WiFi 名称)
+            - 🔄 MIUI/EMUI/ColorOS 等深度定制 ROM 需在系统设置额外开启自启动
+
+            完整说明见 [README](https://github.com/cyhkbl/zju-autoconnect#安装)。
+
+            仓库是 private,仅供自用。
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
