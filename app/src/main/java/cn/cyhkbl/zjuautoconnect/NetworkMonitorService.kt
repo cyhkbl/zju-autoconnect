@@ -305,7 +305,8 @@ class NetworkMonitorService : Service() {
     private suspend fun waitForWifiValidated(timeoutMs: Long): Boolean {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
-            val active = connectivityManager.activeNetwork ?: run {
+            val active = connectivityManager.activeNetwork
+            if (active == null) {
                 kotlinx.coroutines.delay(500)
                 continue
             }
