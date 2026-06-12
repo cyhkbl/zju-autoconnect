@@ -33,16 +33,27 @@ import java.util.concurrent.atomic.AtomicReference
 /**
  * 前台服务:监听 WiFi 状态,连上 ZJUWLAN 后自动登录
  *
- * 为什么用前台服务:
- *  - Android 8+ 后台服务无法长期存活,前台服务带通知可保活
- *  - 用户首次启动会看到常驻通知,可手动停止
- *
  * 触发逻辑:
  *  - 注册 NetworkCallback 监听所有 WiFi 网络
  *  - 连上 WiFi 后检查 SSID,匹配目标列表(ZJUWLAN) → 触发登录
  *  - 用 AtomicBoolean 防止并发登录
+ *  - 如果 OkHttp 调 srun_portal API 失败(Result.NoNetwork),说明 captive portal
+ *    未认证,启动 PortalHelperActivity(WebView 自动填表 + 提交)
  */
 class NetworkMonitorService : Service() {
+
+    // 全局状态(供 UI 读取)
+    object State {
+        val isRunning = AtomicBoolean(false)
+        val lastSsid = AtomicReference<String?>(null)
+        val lastLoginAt = AtomicReference<Long?>(null)
+        val lastLoginResult = AtomicReference<SrunLogin.Result?>(null)
+        val totalAttempts = AtomicInteger(0)
+        val successfulLogins = AtomicInteger(0)
+        val logSnapshot = AtomicReference<List<String>>(emptyList())
+        val portalCompletedAt = AtomicReference<Long?>(null)
+        val portalHelperRunning = AtomicBoolean(false)
+    }
 
     companion object {
         private const val TAG = "NetMonService"
@@ -50,9 +61,10 @@ class NetworkMonitorService : Service() {
         private const val NOTIFICATION_ID = 1001
         private const val ACTION_START = "cn.cyhkbl.zjuautoconnect.START"
         private const val ACTION_STOP = "cn.cyhkbl.zjuautoconnect.STOP"
+        private const val ACTION_RETRY = "cn.cyhkbl.zjuautoconnect.RETRY"
 
         // 浙大校园网 SSID — 触发自动登录的目标
-        private val TARGET_SSIDS = setOf("ZJUWLAN", "ZJUWLAN-Secure", "ZJUWLAN-AUTO")
+        val TARGET_SSIDS = setOf("ZJUWLAN", "ZJUWLAN-Secure", "ZJUWLAN-AUTO")
 
         fun start(context: Context) {
             val intent = Intent(context, NetworkMonitorService::class.java)
@@ -69,18 +81,16 @@ class NetworkMonitorService : Service() {
                 .setAction(ACTION_STOP)
             context.startService(intent)
         }
-    }
 
-    // 全局状态(供 UI 读取)
-    object State {
-        val isRunning = AtomicBoolean(false)
-        val lastSsid = AtomicReference<String?>(null)
-        val lastLoginAt = AtomicReference<Long?>(null)
-        val lastLoginResult = AtomicReference<SrunLogin.Result?>(null)
-        val totalAttempts = AtomicInteger(0)
-        val successfulLogins = AtomicInteger(0)
-        // 最近日志快照(供 Activity 读取)
-        val logSnapshot = AtomicReference<List<String>>(emptyList())
+        /**
+         * Portal 助手完成后调用,让 service 重新尝试 OkHttp 登录
+         */
+        fun requestRetryAfterPortal(context: Context) {
+            State.portalCompletedAt.set(System.currentTimeMillis())
+            val intent = Intent(context, NetworkMonitorService::class.java)
+                .setAction(ACTION_RETRY)
+            context.startService(intent)
+        }
     }
 
     // 日志环形缓冲(最近 50 条)
@@ -94,8 +104,6 @@ class NetworkMonitorService : Service() {
     private val isLoginInFlight = AtomicBoolean(false)
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
-            // onAvailable 触发时 SSID 经常还没就绪(尤其 Android 12+),
-            // 立即尝试一次,失败就等 onCapabilitiesChanged
             val caps = connectivityManager.getNetworkCapabilities(network)
             if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true) {
                 handleWifiCapabilities(network, caps)
@@ -116,11 +124,9 @@ class NetworkMonitorService : Service() {
         }
     }
 
-    // 等待 WiFi 通过 captive portal 验证的最长时间(给系统弹浏览器认证)
+    // 等待 WiFi 通过 captive portal 验证的最长时间
     private val portalWaitTimeoutMs = 30_000L
-    // 登录失败后重试次数
     private val maxLoginRetries = 3
-    // 重试间隔
     private val loginRetryDelayMs = 5_000L
 
     override fun onCreate() {
@@ -134,15 +140,18 @@ class NetworkMonitorService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIFICATION_ID, buildStatusNotification("监听中…", "等待连接 ZJUWLAN"))
         registerNetworkCallback()
-        // 启动时立即查一次当前 WiFi(可能服务启动前已经连上 ZJUWLAN)
-        serviceScope.launch { checkCurrentWifiOnce() }
+        when (intent?.action) {
+            ACTION_RETRY -> {
+                log("📨 收到 ACTION_RETRY(portal 完成后)")
+                serviceScope.launch { attemptLogin() }
+            }
+            else -> {
+                serviceScope.launch { checkCurrentWifiOnce() }
+            }
+        }
         return START_STICKY
     }
 
-    /**
-     * 服务启动时主动检查:用当前 active network + caps 查一次
-     * (callback 可能要等 WiFi 重连才触发)
-     */
     private suspend fun checkCurrentWifiOnce() {
         val active = connectivityManager.activeNetwork ?: run {
             log("当前无活动网络,等待 WiFi 回调")
@@ -167,12 +176,6 @@ class NetworkMonitorService : Service() {
         }
     }
 
-    /**
-     * WiFi capabilities 就绪时的处理:
-     * 1. 尝试读取 SSID
-     * 2. SSID 匹配目标 → 触发登录
-     * 3. SSID 读不到 → 明确打日志(用户能看出是权限问题)
-     */
     private fun handleWifiCapabilities(network: Network, caps: NetworkCapabilities) {
         val ssid = readSsidFromCaps(caps)
         if (ssid == null) {
@@ -186,7 +189,6 @@ class NetworkMonitorService : Service() {
             updateStatusNotification()
             return
         }
-        // 同一 SSID 多次触发不重复登录
         if (ssid == State.lastSsid.get()) {
             return
         }
@@ -201,10 +203,6 @@ class NetworkMonitorService : Service() {
         }
     }
 
-    /**
-     * 从 NetworkCapabilities 读 SSID(API 31+ 唯一可靠方式)
-     * API < 31 走 wifiManager.connectionInfo 兜底
-     */
     private fun readSsidFromCaps(caps: NetworkCapabilities): String? {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val transportInfo = caps.transportInfo as? WifiInfo
@@ -219,7 +217,6 @@ class NetworkMonitorService : Service() {
 
     private fun sanitizeSsid(raw: String): String? {
         if (raw.isBlank() || raw == "<unknown ssid>") return null
-        // 7.0+ WifiInfo 返回带引号的 SSID
         return raw.trim('"').takeIf { it.isNotBlank() }
     }
 
@@ -235,14 +232,13 @@ class NetworkMonitorService : Service() {
                 return
             }
 
-            // 等待 captive portal 验证完成(Android 系统弹浏览器让用户点"登录")
-            // 浙大 ZJUWLAN 是 portal 认证 WiFi,未认证前所有 HTTPS 请求会被 drop
             log("等待 WiFi 通过 captive portal 验证…")
             val portalOk = waitForWifiValidated(portalWaitTimeoutMs)
             if (!portalOk) {
-                log("⚠️ ${portalWaitTimeoutMs / 1000} 秒内 WiFi 未通过 portal 验证(可能系统在等你在浏览器里点登录),仍尝试登录…")
+                log("⚠️ ${portalWaitTimeoutMs / 1000} 秒内 WiFi 未通过 portal 验证 → 启动 Portal 助手自动填表")
+                launchPortalHelper()
             } else {
-                log("✅ WiFi 已通过 portal 验证")
+                log("✅ WiFi 已通过 portal 验证,直接登录")
             }
 
             var lastResult: SrunLogin.Result = SrunLogin.Result.Failed("尚未尝试")
@@ -261,7 +257,7 @@ class NetworkMonitorService : Service() {
                         State.successfulLogins.incrementAndGet()
                         log("✅ 登录成功 (${cost}ms)")
                         updateStatusNotification()
-                        return  // 成功就跳出,不再重试
+                        return
                     }
                     is SrunLogin.Result.AlreadyOnline -> {
                         State.successfulLogins.incrementAndGet()
@@ -273,20 +269,22 @@ class NetworkMonitorService : Service() {
                         log("❌ 第 $attempt 次失败: ${result.reason}")
                     }
                     is SrunLogin.Result.NoNetwork -> {
-                        log("⚠️ 第 $attempt 次无网络(系统可能仍在弹 portal 浏览器)")
+                        log("⚠️ 第 $attempt 次无网络")
+                        // 第 1 次 NoNetwork 时启动 Portal 助手
+                        if (attempt == 1) launchPortalHelper()
                     }
                 }
-                // 失败就重试,等几秒
                 if (attempt < maxLoginRetries) {
                     log("⏳ 等待 ${loginRetryDelayMs / 1000} 秒后重试…")
                     kotlinx.coroutines.delay(loginRetryDelayMs)
                 }
             }
-            // 全部失败后,给用户一个明确的提示
             when (lastResult) {
-                is SrunLogin.Result.NoNetwork -> log("❌ ${maxLoginRetries} 次重试仍无网络 → 可能是 portal 还没认证。请打开任意网页,系统会弹'登录到网络'页面,认证后本 App 会自动重连。")
-                is SrunLogin.Result.Failed -> log("❌ ${maxLoginRetries} 次重试仍失败: ${lastResult.reason}")
-                else -> {}  // success/alreadyOnline 已经在循环里 return 了
+                is SrunLogin.Result.NoNetwork ->
+                    log("❌ ${maxLoginRetries} 次重试仍无网络。Portal 助手正在处理(透明 Activity 自动填表),完成后会重试。")
+                is SrunLogin.Result.Failed ->
+                    log("❌ ${maxLoginRetries} 次重试仍失败: ${lastResult.reason}")
+                else -> {}
             }
             updateStatusNotification()
         } catch (e: Exception) {
@@ -298,10 +296,27 @@ class NetworkMonitorService : Service() {
     }
 
     /**
-     * 等待 WiFi 通过 captive portal 验证
-     * 当 NET_CAPABILITY_VALIDATED 置位时,说明系统认为 WiFi 真能上网(portal 已认证)
-     * 返回 true 表示已通过,false 表示超时
+     * 启动 Portal 助手(WebView 自动填 + 提交)
+     * Service 里启动 Activity 需要 FLAG_ACTIVITY_NEW_TASK
      */
+    private fun launchPortalHelper() {
+        if (State.portalHelperRunning.get()) {
+            log("Portal 助手已在运行,跳过")
+            return
+        }
+        State.portalHelperRunning.set(true)
+        try {
+            val intent = Intent(this, PortalHelperActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+            log("🤖 已启动 Portal 助手(WebView 自动填表)")
+        } catch (e: Exception) {
+            Log.e(TAG, "启动 Portal 助手失败", e)
+            log("❌ 启动 Portal 助手失败: ${e.message}")
+            State.portalHelperRunning.set(false)
+        }
+    }
+
     private suspend fun waitForWifiValidated(timeoutMs: Long): Boolean {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
@@ -328,14 +343,10 @@ class NetworkMonitorService : Service() {
         synchronized(logLock) {
             logBuffer.addLast(line)
             while (logBuffer.size > maxLogLines) logBuffer.removeFirst()
-            // 同步给 State,UI 可以读取
             State.logSnapshot.set(logBuffer.toList())
         }
     }
 
-    /**
-     * 供 MainActivity 调用,拉取最近 N 条日志
-     */
     fun snapshotLogs(): List<String> = synchronized(logLock) { logBuffer.toList() }
 
     private fun createNotificationChannel() {
@@ -376,6 +387,7 @@ class NetworkMonitorService : Service() {
             lastResult is SrunLogin.Result.AlreadyOnline -> "✅ 已在网"
             lastResult is SrunLogin.Result.Failed -> "❌ 上次登录失败"
             lastResult is SrunLogin.Result.NoNetwork -> "⚠️ 无网络"
+            State.portalHelperRunning.get() -> "🤖 自动完成 portal 认证中…"
             ssid != null && ssid in TARGET_SSIDS -> "📶 ZJUWLAN 已连接,登录中…"
             ssid != null -> "📶 已连: $ssid (非目标网络)"
             else -> "👀 监听中…"
@@ -399,4 +411,3 @@ class NetworkMonitorService : Service() {
         super.onDestroy()
     }
 }
-

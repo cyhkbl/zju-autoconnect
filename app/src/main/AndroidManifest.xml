@@ -46,6 +46,14 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".PortalHelperActivity"
+            android:exported="false"
+            android:theme="@style/Theme.ZJUAutoConnect.Translucent"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity="" />
+
         <service
             android:name=".NetworkMonitorService"
             android:exported="false"

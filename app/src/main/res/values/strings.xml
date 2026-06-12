@@ -33,4 +33,7 @@
     <string name="msg_login_already_online">✅ 已在网</string>
     <string name="msg_login_failed">❌ 失败: %1$s</string>
     <string name="msg_login_no_network">⚠️ 无网络,请确认连接了 ZJUWLAN</string>
+    <string name="portal_helper_in_progress">🤖 正在自动完成 portal 认证…</string>
+    <string name="portal_helper_done">✅ portal 认证完成</string>
+    <string name="portal_helper_failed">❌ portal 认证失败,需要手动打开浏览器点一次登录</string>
 </resources>
