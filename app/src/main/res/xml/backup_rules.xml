@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- 排除加密的 prefs(用户账号密码),不参与云备份 -->
+    <exclude domain="sharedpref" path="zju_autoconnect_prefs.xml" />
+</full-backup-content>

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 主色:奶白底 + 浙大蓝 -->
+    <color name="background">#FAFAF7</color>
+    <color name="background_subtle">#F2F2EE</color>
+    <color name="card_glass">#BFFAFAF7</color>  <!-- alpha 0.75 模拟毛玻璃 -->
+    <color name="card_glass_border">#1F000000</color>
+    <color name="primary">#2563EB</color>
+    <color name="primary_dark">#1D4ED8</color>
+    <color name="primary_pressed">#1E40AF</color>
+    <color name="text_primary">#1F2937</color>
+    <color name="text_secondary">#6B7280</color>
+    <color name="text_tertiary">#9CA3AF</color>
+    <color name="divider">#1A000000</color>
+    <color name="success">#10B981</color>
+    <color name="warning">#F59E0B</color>
+    <color name="error">#EF4444</color>
+
+    <!-- 浙大 Logo 蓝(供品牌区使用) -->
+    <color name="zju_blue">#005BAA</color>
+</resources>

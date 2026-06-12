@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 居中 WiFi 图标,白色,自适应图标安全区 72x72 -->
+    <group
+        android:translateX="22"
+        android:translateY="22">
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M32,49l9,-11.25c-2.25,-1.75 -5.5,-2.75 -9,-2.75s-6.75,1 -9,2.75L32,49zM3.5,22.75l6.75,7C16.75,21.5 24,18.25 32,18.25s15.25,3.25 21.75,11.5l6.75,-7C46.75,13 37.5,9.25 32,9.25S17.25,13 3.5,22.75zM10.5,40.5l6.75,6.75c3.75,-3.5 8,-5.25 12.75,-5.25s9,1.75 12.75,5.25L49.5,40.5C43.5,34.25 37.25,31.25 32,31.25s-11.5,3 -19.5,9.25z" />
+    </group>
+</vector>

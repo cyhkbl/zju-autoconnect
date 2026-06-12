@@ -1,0 +1,36 @@
+<resources>
+    <string name="app_name">ZJU 校园网</string>
+    <string name="title_main">ZJU 校园网自动连接</string>
+    <string name="label_status">当前状态</string>
+    <string name="label_credentials">账号设置</string>
+    <string name="label_username">学号</string>
+    <string name="label_password">校园网密码</string>
+    <string name="label_auto_start">开机自启</string>
+    <string name="label_logs">最近日志</string>
+    <string name="btn_save_credentials">保存</string>
+    <string name="btn_start_service">启动服务</string>
+    <string name="btn_stop_service">停止服务</string>
+    <string name="btn_manual_login">手动登录</string>
+    <string name="btn_clear_logs">清空</string>
+    <string name="hint_username">例如 3250102535</string>
+    <string name="hint_password">校园网密码</string>
+    <string name="status_idle">未启动</string>
+    <string name="status_monitoring">监听中</string>
+    <string name="status_logged_in">已登录</string>
+    <string name="status_already_online">已在网</string>
+    <string name="status_failed">登录失败</string>
+    <string name="status_no_network">无网络</string>
+    <string name="dialog_permission_title">需要授予权限</string>
+    <string name="dialog_permission_notification">需要通知权限,才能保持后台服务运行(显示常驻通知)</string>
+    <string name="dialog_permission_location">需要位置权限,才能读取当前连接的 WiFi 名称 (Android 13+ 隐私限制)</string>
+    <string name="dialog_grant">去设置</string>
+    <string name="dialog_cancel">取消</string>
+    <string name="msg_credentials_saved">✅ 账号已保存</string>
+    <string name="msg_service_started">✅ 服务已启动</string>
+    <string name="msg_service_stopped">⏹ 服务已停止</string>
+    <string name="msg_fill_both">请填写学号和密码</string>
+    <string name="msg_login_success">✅ 登录成功</string>
+    <string name="msg_login_already_online">✅ 已在网</string>
+    <string name="msg_login_failed">❌ 失败: %1$s</string>
+    <string name="msg_login_no_network">⚠️ 无网络,请确认连接了 ZJUWLAN</string>
+</resources>
