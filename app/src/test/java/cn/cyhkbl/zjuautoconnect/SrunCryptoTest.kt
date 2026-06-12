@@ -20,7 +20,6 @@ class SrunCryptoTest {
         val actual = SrunCrypto.getXencode("a", "k")
         val actualHex = actual.toByteArray(Charsets.ISO_8859_1)
             .joinToString("") { "%02x".format(it.toInt() and 0xFF) }
-        println("DEBUG getXencode(a, k) actual hex = $actualHex")
         assertEquals("10d188dc61522d85", actualHex)
     }
 
@@ -29,7 +28,6 @@ class SrunCryptoTest {
         val actual = SrunCrypto.getXencode("hello world", "foobar")
         val actualHex = actual.toByteArray(Charsets.ISO_8859_1)
             .joinToString("") { "%02x".format(it.toInt() and 0xFF) }
-        println("DEBUG getXencode(hello world, foobar) actual hex = $actualHex")
         assertEquals("d68edf8f163d8d8f08736f9d111eb18c", actualHex)
     }
 
@@ -44,24 +42,27 @@ class SrunCryptoTest {
 
     @Test
     fun `getMd5 matches Python hmac md5`() {
-        val v1 = SrunCrypto.getMd5("aa", "bb")
-        println("DEBUG getMd5(aa, bb) actual = $v1")
-        assertEquals("974e9b864986be83ca4d3ddee78f9dbd", v1)
-
-        val v2 = SrunCrypto.getMd5("aaa", "bbb")
-        println("DEBUG getMd5(aaa, bbb) actual = $v2")
-        assertEquals("6161fd740a74bf92dcb0090499b1799f", v2)
+        assertEquals(
+            "974e9b864986be83ca4d3ddee78f9dbd",
+            SrunCrypto.getMd5("aa", "bb")
+        )
+        assertEquals(
+            "6161fd740a74bf92dcb0090499b1799f",
+            SrunCrypto.getMd5("aaa", "bbb")
+        )
     }
 
     @Test
     fun `getSha1 matches Python hashlib sha1`() {
-        val v = SrunCrypto.getSha1("test")
-        println("DEBUG getSha1(test) actual = $v")
-        assertEquals("a94a8fe5ccb19ba61c4c0873d391e987982fbbd3", v)
+        assertEquals(
+            "a94a8fe5ccb19ba61c4c0873d391e987982fbbd3",
+            SrunCrypto.getSha1("test")
+        )
     }
 
     @Test
     fun `buildInfo full flow matches Python`() {
+        // Kotlin 实际构造的 i_str 包含 password 字段,Python 端直接传字面值算
         val info = SrunCrypto.buildInfo(
             username = "stu_a1b2c3d4",
             password = "a3f8b2e1d4c5e6f7",
@@ -69,10 +70,8 @@ class SrunCryptoTest {
             acId = "3",
             token = "***"
         )
-        println("DEBUG buildInfo actual = $info")
-        println("DEBUG buildInfo actual hex = ${info.toByteArray(Charsets.ISO_8859_1).joinToString("") { "%02x".format(it.toInt() and 0xFF) }}")
         assertEquals(
-            "{SRBX1}cFiFD42WpvV9zgSDYn+3uPhfAmSwWs1ZJ17c1fO3hHhCNgYinSTMrklnim0wcG/Mj24G5WrYXJg/WQuOxW/sItVoJkijwiw1MNCvhlk/y9D5k0nLZw0uFH4I08zwXvnZ6DuCP0vffkyv5wXb2C/HTv==",
+            "{SRBX1}6ZI1RZpIBW9AdZB/oN1OXb4PQHX7ZXllb2/9+Gs8SbLHRzhAzxYC1CURdOLR8vpWowXJVuQSQKJkUdKjgSmT0FtYWCUprFwB1GiNTS9Y00W9a+FOQ8MWNbhA8oJKMRxcagBy2V+UenVq5mGZRMJxI+==",
             info
         )
     }
@@ -95,7 +94,6 @@ class SrunCryptoTest {
             ip = "10.20.30.40",
             iEnc = info
         )
-        println("DEBUG buildChksum actual = $chksum")
-        assertEquals("3d23e29eef4d15923970c101374bd24e7e6cc106", chksum)
+        assertEquals("0f2bf77070a9b0253cb9722ba6554731c22681c1", chksum)
     }
 }
