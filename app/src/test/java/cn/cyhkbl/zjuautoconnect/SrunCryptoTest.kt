@@ -6,8 +6,8 @@ import org.junit.Test
 /**
  * 单元测试 — 与 Python internet.pyw 的输出一致
  *
- * Expected 值通过运行 /home/henry/internet.pyw 算得,
- * 这里硬编码以保证跨语言实现一致。
+ * Expected 值通过运行 /home/henry/internet.pyw 算得。
+ * 注意:input 一律用不触发 redaction 的普通字面值(无 password/secret 等敏感词)
  *
  * 在 CI (GitHub Actions) 上跑: ./gradlew :app:testDebugUnitTest
  */
@@ -43,7 +43,6 @@ class SrunCryptoTest {
 
     @Test
     fun `getBase64 single byte matches Python`() {
-        // get_base64("A") = "++==",  get_base64("AB") = "+H2=",  get_base64("ABC") = "+HRJ"
         assertEquals("++==", SrunCrypto.getBase64("A"))
         assertEquals("+H2=", SrunCrypto.getBase64("AB"))
         assertEquals("+HRJ", SrunCrypto.getBase64("ABC"))
@@ -53,20 +52,21 @@ class SrunCryptoTest {
 
     @Test
     fun `getMd5 matches Python hmac md5`() {
-        // 第一个用例: hmac.new(b"sample_token", b"sample_password", md5).hexdigest()
+        // hmac.new(b"bb", b"aa", md5).hexdigest() = 974e9b864986be83ca4d3ddee78f9dbd
         assertEquals(
-            "ebf4b9558b17e165c641ff3678d4ddb2",
-            SrunCrypto.getMd5("sample_password", "sample_token")
+            "974e9b864986be83ca4d3ddee78f9dbd",
+            SrunCrypto.getMd5("aa", "bb")
         )
-        // 第二个用例: 使用通用占位符,验证长 token + 长 password 的 HMAC-MD5 输出
+        // hmac.new(b"bbb", b"aaa", md5).hexdigest() = 6161fd740a74bf92dcb0090499b1799f
         assertEquals(
-            "348bfb651201728488d56f6eabcb3de8",
-            SrunCrypto.getMd5("placeholder_password", "***")
+            "6161fd740a74bf92dcb0090499b1799f",
+            SrunCrypto.getMd5("aaa", "bbb")
         )
     }
 
     @Test
     fun `getSha1 matches Python hashlib sha1`() {
+        // hashlib.sha1(b"test").hexdigest() = a94a8fe5ccb19ba61c4c0873d391e987982fbbd3
         assertEquals(
             "a94a8fe5ccb19ba61c4c0873d391e987982fbbd3",
             SrunCrypto.getSha1("test")
@@ -75,16 +75,17 @@ class SrunCryptoTest {
 
     @Test
     fun `buildInfo full flow matches Python`() {
-        // 端到端: username + placeholder_password + 占位 ip + 占位 token
+        // i_str 字段名是 srun 标准格式(包含 "password" 字段)
+        // 端到端: i_str + xencode + base64 = "{SRBX1}..."
         val info = SrunCrypto.buildInfo(
-            username = "testuser",
-            password = "placeholder_password",
-            ip = "10.0.0.1",
-            acId = "1",
+            username = "stu_a1b2c3d4",
+            password = "a3f8b2e1d4c5e6f7",
+            ip = "10.20.30.40",
+            acId = "3",
             token = "***"
         )
         assertEquals(
-            "{SRBX1}HzApoUgJXgbMhlrGRfjRUGCBoiWfQqUE4pGJAXU8yBxa/AWBAwI6hadIHs3QyCGNuOUVNDXmy54qBcEm1j6jSu7jTy78h0Ae7zRyxjieoQnwuwIzD/SjJ6fVJh+bHIYSfRHHXaSFJqQZAEy/N9WkRv==",
+            "{SRBX1}cFiFD42WpvV9zgSDYn+3uPhfAmSwWs1ZJ17c1fO3hHhCNgYinSTMrklnim0wcG/Mj24G5WrYXJg/WQuOxW/sItVoJkijwiw1MNCvhlk/y9D5k0nLZw0uFH4I08zwXvnZ6DuCP0vffkyv5wXb2C/HTv==",
             info
         )
     }
@@ -92,21 +93,21 @@ class SrunCryptoTest {
     @Test
     fun `buildChksum full flow matches Python`() {
         val info = SrunCrypto.buildInfo(
-            username = "testuser",
-            password = "placeholder_password",
-            ip = "10.0.0.1",
-            acId = "1",
+            username = "stu_a1b2c3d4",
+            password = "a3f8b2e1d4c5e6f7",
+            ip = "10.20.30.40",
+            acId = "3",
             token = "***"
         )
-        val hmd5 = SrunCrypto.getMd5("placeholder_password", "***")
+        val hmd5 = SrunCrypto.getMd5("a3f8b2e1d4c5e6f7", "***")
         val chksum = SrunCrypto.buildChksum(
             token = "***",
-            username = "testuser",
+            username = "stu_a1b2c3d4",
             hmd5 = hmd5,
-            acId = "1",
-            ip = "10.0.0.1",
+            acId = "3",
+            ip = "10.20.30.40",
             iEnc = info
         )
-        assertEquals("7a492c62cebb1616096c4e4272e9cb077e2e3d86", chksum)
+        assertEquals("3d23e29eef4d15923970c101374bd24e7e6cc106", chksum)
     }
 }
