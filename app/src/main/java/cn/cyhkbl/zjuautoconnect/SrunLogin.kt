@@ -55,9 +55,10 @@ object SrunLogin {
             .proxy(Proxy.NO_PROXY)  // 强制无代理
             .sslSocketFactory(ssl.socketFactory, trustAll[0] as X509TrustManager)
             .hostnameVerifier { _, _ -> true }
-            .connectTimeout(5, TimeUnit.SECONDS)
-            .readTimeout(5, TimeUnit.SECONDS)
-            .writeTimeout(5, TimeUnit.SECONDS)
+            .connectTimeout(15, TimeUnit.SECONDS)   // portal 刚认证完时路由切换可能慢
+            .readTimeout(15, TimeUnit.SECONDS)
+            .writeTimeout(15, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(false)        // 失败就让人工决定,不要自动重试(我们的 retry 在外层)
             .build()
     }
 

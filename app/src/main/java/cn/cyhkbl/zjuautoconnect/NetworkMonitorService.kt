@@ -116,6 +116,13 @@ class NetworkMonitorService : Service() {
         }
     }
 
+    // 等待 WiFi 通过 captive portal 验证的最长时间(给系统弹浏览器认证)
+    private val portalWaitTimeoutMs = 30_000L
+    // 登录失败后重试次数
+    private val maxLoginRetries = 3
+    // 重试间隔
+    private val loginRetryDelayMs = 5_000L
+
     override fun onCreate() {
         super.onCreate()
         connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -227,25 +234,59 @@ class NetworkMonitorService : Service() {
                 log("未配置账号密码,请在 App 里填写")
                 return
             }
-            State.totalAttempts.incrementAndGet()
-            val start = System.currentTimeMillis()
-            State.lastLoginAt.set(start)
-            log("开始登录 (user=${username.takeLast(4).padStart(username.length, '*')})")
-            updateStatusNotification()
-            val result = SrunLogin.login(username, password)
-            val cost = System.currentTimeMillis() - start
-            State.lastLoginResult.set(result)
-            when (result) {
-                is SrunLogin.Result.Success -> {
-                    State.successfulLogins.incrementAndGet()
-                    log("✅ 登录成功 (${cost}ms)")
+
+            // 等待 captive portal 验证完成(Android 系统弹浏览器让用户点"登录")
+            // 浙大 ZJUWLAN 是 portal 认证 WiFi,未认证前所有 HTTPS 请求会被 drop
+            log("等待 WiFi 通过 captive portal 验证…")
+            val portalOk = waitForWifiValidated(portalWaitTimeoutMs)
+            if (!portalOk) {
+                log("⚠️ ${portalWaitTimeoutMs / 1000} 秒内 WiFi 未通过 portal 验证(可能系统在等你在浏览器里点登录),仍尝试登录…")
+            } else {
+                log("✅ WiFi 已通过 portal 验证")
+            }
+
+            var lastResult: SrunLogin.Result = SrunLogin.Result.Failed("尚未尝试")
+            for (attempt in 1..maxLoginRetries) {
+                State.totalAttempts.incrementAndGet()
+                val start = System.currentTimeMillis()
+                State.lastLoginAt.set(start)
+                log("▶ 登录尝试 $attempt/$maxLoginRetries (user=${username.takeLast(4).padStart(username.length, '*')})")
+                updateStatusNotification()
+                val result = SrunLogin.login(username, password)
+                val cost = System.currentTimeMillis() - start
+                lastResult = result
+                State.lastLoginResult.set(result)
+                when (result) {
+                    is SrunLogin.Result.Success -> {
+                        State.successfulLogins.incrementAndGet()
+                        log("✅ 登录成功 (${cost}ms)")
+                        updateStatusNotification()
+                        return  // 成功就跳出,不再重试
+                    }
+                    is SrunLogin.Result.AlreadyOnline -> {
+                        State.successfulLogins.incrementAndGet()
+                        log("✅ 已在网 (${cost}ms)")
+                        updateStatusNotification()
+                        return
+                    }
+                    is SrunLogin.Result.Failed -> {
+                        log("❌ 第 $attempt 次失败: ${result.reason}")
+                    }
+                    is SrunLogin.Result.NoNetwork -> {
+                        log("⚠️ 第 $attempt 次无网络(系统可能仍在弹 portal 浏览器)")
+                    }
                 }
-                is SrunLogin.Result.AlreadyOnline -> {
-                    State.successfulLogins.incrementAndGet()
-                    log("✅ 已在网 (${cost}ms)")
+                // 失败就重试,等几秒
+                if (attempt < maxLoginRetries) {
+                    log("⏳ 等待 ${loginRetryDelayMs / 1000} 秒后重试…")
+                    kotlinx.coroutines.delay(loginRetryDelayMs)
                 }
-                is SrunLogin.Result.Failed -> log("❌ 失败: ${result.reason}")
-                is SrunLogin.Result.NoNetwork -> log("⚠️ 无网络 (可能未连上校园网)")
+            }
+            // 全部失败后,给用户一个明确的提示
+            when (lastResult) {
+                is SrunLogin.Result.NoNetwork -> log("❌ ${maxLoginRetries} 次重试仍无网络 → 可能是 portal 还没认证。请打开任意网页,系统会弹'登录到网络'页面,认证后本 App 会自动重连。")
+                is SrunLogin.Result.Failed -> log("❌ ${maxLoginRetries} 次重试仍失败: ${lastResult.reason}")
+                else -> {}  // success/alreadyOnline 已经在循环里 return 了
             }
             updateStatusNotification()
         } catch (e: Exception) {
@@ -254,6 +295,29 @@ class NetworkMonitorService : Service() {
         } finally {
             isLoginInFlight.set(false)
         }
+    }
+
+    /**
+     * 等待 WiFi 通过 captive portal 验证
+     * 当 NET_CAPABILITY_VALIDATED 置位时,说明系统认为 WiFi 真能上网(portal 已认证)
+     * 返回 true 表示已通过,false 表示超时
+     */
+    private suspend fun waitForWifiValidated(timeoutMs: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            val active = connectivityManager.activeNetwork ?: run {
+                kotlinx.coroutines.delay(500)
+                continue
+            }
+            val caps = connectivityManager.getNetworkCapabilities(active)
+            if (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) &&
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            ) {
+                return true
+            }
+            kotlinx.coroutines.delay(500)
+        }
+        return false
     }
 
     private fun log(msg: String) {
