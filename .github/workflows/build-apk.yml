@@ -65,14 +65,16 @@ jobs:
           path: dist
 
       - name: Rename to readable filename
+        env:
+          TAG_NAME: ${{ github.ref_name }}
         run: |
-          mv dist/app-debug.apk "dist/ZJU-AutoConnect-${GITHUB_REF_NAME}-debug.apk"
+          mv dist/app-debug.apk "dist/ZJU-AutoConnect-${TAG_NAME}-debug.apk"
           ls -la dist/
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/ZJU-AutoConnect-${GITHUB_REF_NAME}-debug.apk
+          files: dist/ZJU-AutoConnect-${{ github.ref_name }}-debug.apk
           draft: false
           generate_release_notes: true
           fail_on_unmatched_files: true
