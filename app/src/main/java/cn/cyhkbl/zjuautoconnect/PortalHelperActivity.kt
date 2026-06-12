@@ -20,32 +20,43 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
- * Portal 自动认证助手 — 用透明 Activity + WebView 加载浙大 portal 登录页,
- * 自动填学号 + 密码,自动点登录,然后自动关闭。
+ * Portal 自动认证助手 — 透明 Activity + WebView 加载浙大 mobile portal,
+ * 自动填学号 + 密码 + 点登录,然后自动关闭。
  *
- * 触发时机:Service 监听到 ZJUWLAN + OkHttp 调 srun_portal API 失败(说明 system 还在等 portal 认证)
- * 目标:用户不需要看到任何界面,App 静默完成 portal 认证。
+ * 关键发现(2026-06 抓的真实 DOM):
+ *  - net.zju.edu.cn/ 会 meta refresh 到 srun_portal_pc
+ *  - srun_portal_pc 用 redirect.js 自动跳到 srun_portal_phone(手机 UA 时)
+ *  - 表单元素用 id 标识:
+ *      <input type="text" id="username">
+ *      <input type="password" id="password">
+ *      <button type="button" id="login-account">登录</button>  ← type=button 不是 submit
+ *  - 旧 JS 找 button[type=submit] 失败 + 没等 redirect 完成,导致填不进去
+ *
+ * 修复:
+ *  1. 直接 loadUrl srun_portal_phone(跳过 PC 中转,减少跳转延迟)
+ *  2. 用精确 id 选择器
+ *  3. MutationObserver 监听 DOM 变化(Vue/异步渲染时反复尝试)
+ *  4. 填表后 dispatch input 事件(框架可能需要)
  */
 class PortalHelperActivity : Activity() {
 
     companion object {
         private const val TAG = "PortalHelper"
-        private const val PORTAL_URL = "https://net.zju.edu.cn/"
+        // 跳过 PC 中转直接进 mobile 版(redirect.js 二次跳转在手机 UA 时只会绕一圈)
+        private const val PORTAL_PHONE_URL =
+            "https://net.zju.edu.cn/srun_portal_phone?ac_id=60&theme=zju"
     }
 
     private lateinit var webView: WebView
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private var hasInjected = false
     private var finished = false
     private val statusView: TextView by lazy { TextView(this) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // 透明背景,看起来就像悬浮层
         window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
         window.setGravity(Gravity.TOP or Gravity.START)
 
-        // 状态显示:全屏覆盖一个 TextView,提示正在自动认证(用户能看见)
         statusView.text = getString(R.string.portal_helper_in_progress)
         statusView.setTextColor(Color.WHITE)
         statusView.textSize = 14f
@@ -70,9 +81,9 @@ class PortalHelperActivity : Activity() {
         webView = WebView(this)
         webView.settings.javaScriptEnabled = true
         webView.settings.domStorageEnabled = true
-        webView.settings.loadWithOverviewMode = true
-        webView.settings.useWideViewPort = true
-        // 隐藏 WebView(透明 Activity 内的),但保持运行
+        // 关键:用手机 UA,redirect.js 才会把 srun_portal_pc 跳到 srun_portal_phone
+        webView.settings.userAgentString =
+            "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
         webView.visibility = WebView.INVISIBLE
         webView.layoutParams = ViewGroup.LayoutParams(1, 1)
         (findViewById<ViewGroup>(android.R.id.content)).addView(webView)
@@ -84,25 +95,31 @@ class PortalHelperActivity : Activity() {
 
             override fun onPageFinished(view: WebView, url: String) {
                 Log.d(TAG, "onPageFinished: $url")
-                if (hasInjected) return
-                // 等 JS 渲染好表单
-                view.postDelayed({ injectCredentials(view) }, 600)
+                // 渲染后 200ms 试一次(快速路径)
+                view.postDelayed({ injectCredentials(view) }, 200)
+            }
+
+            override fun shouldOverrideUrlLoading(
+                view: WebView,
+                request: android.webkit.WebResourceRequest
+            ): Boolean {
+                Log.d(TAG, "redirect to: ${request.url}")
+                // 允许 redirect.js 跳到 phone 版
+                return false
             }
         }
 
-        webView.loadUrl(PORTAL_URL)
+        webView.loadUrl(PORTAL_PHONE_URL)
     }
 
     /**
-     * 注入 JS,自动填学号 + 密码 + 提交
-     *
-     * 不依赖具体 input id,通用方案:
-     *  - 找第一个 type="text"/"number"/"tel" 的 input(用户名)
-     *  - 找 type="password" 的 input(密码)
-     *  - 找 type="submit" 按钮或第一个 button
+     * 注入 JS:
+     *  1. 立即尝试填表(用 id 选择器)
+     *  2. 注册 MutationObserver,持续监听 DOM 变化(异步渲染时)
+     *  3. 填过之后用 data-zju-filled 标记,防止重复填
      */
     private fun injectCredentials(view: WebView) {
-        if (hasInjected || finished) return
+        if (finished) return
         val (username, password) = PrefsManager.getCredentials(this)
         if (username.isBlank() || password.isBlank()) {
             finishWithError("未配置账号密码")
@@ -112,41 +129,34 @@ class PortalHelperActivity : Activity() {
         val js = """
             (function() {
                 try {
-                    var inputs = document.querySelectorAll('input');
-                    var userInput = null, pwdInput = null;
-                    for (var i = 0; i < inputs.length; i++) {
-                        var t = (inputs[i].type || '').toLowerCase();
-                        if (t === 'password') {
-                            pwdInput = inputs[i];
-                        } else if (t === 'text' || t === 'number' || t === 'tel' || t === 'email') {
-                            if (!userInput) userInput = inputs[i];
-                        }
+                    // 立即尝试一次
+                    function tryFill() {
+                        var userInput = document.getElementById('username');
+                        var pwdInput = document.getElementById('password');
+                        var btn = document.getElementById('login-account');
+                        if (!userInput || !pwdInput || !btn) return false;
+                        if (userInput.dataset && userInput.dataset.zjuFilled === '1') return true;
+                        if (userInput.dataset) userInput.dataset.zjuFilled = '1';
+                        userInput.value = '${username.replace("'", "\\'")}';
+                        pwdInput.value = '${password.replace("'", "\\'")}';
+                        // 触发 input 事件(Vue/React 框架可能需要)
+                        userInput.dispatchEvent(new Event('input', {bubbles: true}));
+                        pwdInput.dispatchEvent(new Event('input', {bubbles: true}));
+                        userInput.dispatchEvent(new Event('change', {bubbles: true}));
+                        pwdInput.dispatchEvent(new Event('change', {bubbles: true}));
+                        btn.click();
+                        return true;
                     }
-                    if (!userInput || !pwdInput) {
-                        return JSON.stringify({ok: false, reason: '未找到表单 input'});
+                    var ok = tryFill();
+                    // 即使立即成功,也注册 observer 兜底(异步渲染场景)
+                    if (document.body) {
+                        new MutationObserver(function() {
+                            tryFill();
+                        }).observe(document.body, {childList: true, subtree: true});
                     }
-                    userInput.value = '${username.replace("'", "\\'")}';
-                    pwdInput.value = '${password.replace("'", "\\'")}';
-                    userInput.dispatchEvent(new Event('input', {bubbles: true}));
-                    pwdInput.dispatchEvent(new Event('input', {bubbles: true}));
-
-                    // 找 submit 按钮
-                    var submit = document.querySelector('button[type="submit"]')
-                              || document.querySelector('input[type="submit"]')
-                              || document.querySelector('button[id*="login" i]')
-                              || document.querySelector('button[name*="login" i]')
-                              || document.querySelector('button.btn-primary')
-                              || document.querySelector('form button');
-                    if (!submit) {
-                        // 找不到按钮,尝试 form.submit()
-                        var form = userInput.form || pwdInput.form;
-                        if (form) { form.submit(); return JSON.stringify({ok: true, way: 'form.submit'}); }
-                        return JSON.stringify({ok: false, reason: '未找到提交按钮'});
-                    }
-                    submit.click();
-                    return JSON.stringify({ok: true});
+                    return JSON.stringify({ok: ok, body: !!document.body});
                 } catch (e) {
-                    return JSON.stringify({ok: false, reason: e.toString()});
+                    return JSON.stringify({ok: false, error: e.toString()});
                 }
             })();
         """.trimIndent()
@@ -156,15 +166,29 @@ class PortalHelperActivity : Activity() {
             scope.launch {
                 if (result == null || result.contains("\"ok\":false")) {
                     val reason = result ?: "未知"
-                    finishWithError("填表失败: $reason")
-                    return@launch
+                    // 立即注入失败不要立刻放弃,等 2 秒再试一次
+                    delay(2000)
+                    view.evaluateJavascript(js) { retryResult ->
+                        Log.d(TAG, "retry inject result: $retryResult")
+                        if (retryResult != null && !retryResult.contains("\"ok\":false")) {
+                            onFilled()
+                        } else {
+                            finishWithError("填表失败: $retryResult")
+                        }
+                    }
+                } else {
+                    onFilled()
                 }
-                // 成功注入,等 4-5 秒让表单提交 + portal 跳转
-                hasInjected = true
-                statusView.text = "⏳ 等待 portal 响应…"
-                delay(5000)
-                finishWithSuccess()
             }
+        }
+    }
+
+    private fun onFilled() {
+        statusView.text = "⏳ 等待 portal 响应…"
+        // 8 秒后关闭,给 form 提交 + portal 跳转时间
+        scope.launch {
+            delay(8000)
+            finishWithSuccess()
         }
     }
 
@@ -175,7 +199,6 @@ class PortalHelperActivity : Activity() {
             Toast.makeText(this, R.string.portal_helper_done, Toast.LENGTH_SHORT).show()
             Log.d(TAG, "portal 认证流程完成,关闭 Activity")
             finish()
-            // 通知 service:portal 完成,可以重试 OkHttp 登录
             NetworkMonitorService.State.portalCompletedAt.set(System.currentTimeMillis())
             NetworkMonitorService.requestRetryAfterPortal(this)
         }
@@ -185,12 +208,11 @@ class PortalHelperActivity : Activity() {
         if (finished) return
         finished = true
         runOnUiThread {
-            statusView.text = getString(R.string.portal_helper_failed)
+            statusView.text = getString(R.string.portal_helper_failed) + "\n$reason"
             Log.e(TAG, "portal 助手失败: $reason")
             Toast.makeText(this, R.string.portal_helper_failed, Toast.LENGTH_LONG).show()
-            // 2 秒后关闭,让用户看到错误提示
             scope.launch {
-                delay(2500)
+                delay(3000)
                 finish()
             }
         }
